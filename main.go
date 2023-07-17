@@ -1,64 +1,101 @@
 package main
 
 import (
+	"encoding/json"
 	"github.com/gin-gonic/gin"
+	"io/ioutil"
+	"log"
+	"net/http"
 	"os"
 	"s3db/internal"
 )
 
+type App struct {
+	s3Config internal.S3Config
+}
+
 func main() {
-	s3Config := internal.S3Config{
-		Region:          os.Getenv("S3_REGION"),
-		AccessKeyID:     os.Getenv("S3_ACCESS_KEY_ID"),
-		SecretAccessKey: os.Getenv("S3_SECRET_ACCESS_KEY"),
-		BucketName:      os.Getenv("S3_BUCKET_NAME"),
-	}
+	app := NewApp()
 
 	r := gin.Default()
-
-	r.POST("/drop-db", func(c *gin.Context) {
-		err := internal.DropDB(s3Config)
-		if err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(200, gin.H{"message": "Database dropped successfully"})
-	})
-
-	r.POST("/new-record", func(c *gin.Context) {
-		var newRecordRequest internal.NewRecordRequest
-		err := c.ShouldBindJSON(&newRecordRequest)
-		if err != nil {
-			c.JSON(400, gin.H{"error": "invalid request"})
-			return
-		}
-
-		err = internal.NewRecord(s3Config, newRecordRequest)
-		if err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(200, gin.H{"message": "Record added successfully"})
-	})
-
-	r.GET("/get-record", func(c *gin.Context) {
-		var getRecordRequest internal.GetRecordRequest
-		err := c.ShouldBindJSON(&getRecordRequest)
-		if err != nil {
-			c.JSON(400, gin.H{"error": "invalid request"})
-			return
-		}
-
-		value, err := internal.GetRecord(s3Config, getRecordRequest)
-		if err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(200, gin.H{"value": value})
-	})
+	r.GET("/records/:id", app.handleGetRecord)
+	r.POST("/records/:id", app.handlePostRecord)
+	r.GET("/records", app.handleGetRecords)
+	r.POST("/drop-db", app.handleDropDB)
 
 	err := r.Run()
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
+}
+
+func NewApp() *App {
+	return &App{
+		s3Config: internal.S3Config{
+			Region:          os.Getenv("S3_REGION"),
+			AccessKeyID:     os.Getenv("S3_ACCESS_KEY_ID"),
+			SecretAccessKey: os.Getenv("S3_SECRET_ACCESS_KEY"),
+			BucketName:      os.Getenv("S3_BUCKET_NAME"),
+		},
+	}
+}
+
+func (app *App) handleGetRecord(c *gin.Context) {
+	key := c.Param("id")
+	resp, err := internal.GetRecord(app.s3Config, key)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	var jsonData interface{}
+	err = json.Unmarshal([]byte(resp), &jsonData)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, jsonData)
+}
+
+func (app *App) handlePostRecord(c *gin.Context) {
+	key := c.Param("id")
+	serializedBody, err := ioutil.ReadAll(c.Request.Body)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var jsonData interface{}
+	err = json.Unmarshal(serializedBody, &jsonData)
+	if err != nil {
+		c.String(http.StatusBadRequest, "got a non-JSON body")
+		return
+	}
+
+	err = internal.NewRecord(app.s3Config, key, string(serializedBody))
+	if err != nil {
+		c.String(http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	c.Status(http.StatusCreated)
+}
+
+func (app *App) handleGetRecords(c *gin.Context) {
+	allObjectsList, err := internal.ListAllObjects(app.s3Config)
+	if err != nil {
+		c.String(http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, allObjectsList)
+}
+
+func (app *App) handleDropDB(c *gin.Context) {
+	err := internal.DropDB(app.s3Config)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Database dropped successfully"})
 }

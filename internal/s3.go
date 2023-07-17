@@ -2,13 +2,14 @@ package internal
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
-	"io"
+	"strings"
 )
 
 type S3Config struct {
@@ -16,15 +17,6 @@ type S3Config struct {
 	AccessKeyID     string
 	SecretAccessKey string
 	BucketName      string
-}
-
-type NewRecordRequest struct {
-	Key   string
-	Value string
-}
-
-type GetRecordRequest struct {
-	Key string
 }
 
 func deleteAllObjects(objList *s3.ListObjectsOutput, svc *s3.S3, config S3Config) error {
@@ -81,7 +73,7 @@ func DropDB(config S3Config) error {
 	return nil
 }
 
-func NewRecord(config S3Config, request NewRecordRequest) error {
+func NewRecord(config S3Config, key string, value string) error {
 	svc, err := newS3Service(config)
 	if err != nil {
 		return err
@@ -89,8 +81,8 @@ func NewRecord(config S3Config, request NewRecordRequest) error {
 
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(config.BucketName),
-		Key:    aws.String(request.Key),
-		Body:   newBody(request.Value),
+		Key:    aws.String(key),
+		Body:   strings.NewReader(value),
 	}
 
 	_, err = svc.PutObject(input)
@@ -102,7 +94,7 @@ func NewRecord(config S3Config, request NewRecordRequest) error {
 	return nil
 }
 
-func GetRecord(config S3Config, request GetRecordRequest) (string, error) {
+func GetRecord(config S3Config, key string) (string, error) {
 	svc, err := newS3Service(config)
 	if err != nil {
 		return "", err
@@ -110,15 +102,15 @@ func GetRecord(config S3Config, request GetRecordRequest) (string, error) {
 
 	input := &s3.GetObjectInput{
 		Bucket: aws.String(config.BucketName),
-		Key:    aws.String(request.Key),
+		Key:    aws.String(key),
 	}
 
 	result, err := svc.GetObject(input)
 	if err != nil {
-		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == s3.ErrCodeNoSuchKey {
-			return "object not found", nil
+		if IsObjectNotFoundErr(err) {
+			return "", errors.New("object not found")
 		}
-		return "", err
+
 	}
 
 	buf := new(bytes.Buffer)
@@ -129,6 +121,30 @@ func GetRecord(config S3Config, request GetRecordRequest) (string, error) {
 	return buf.String(), nil
 }
 
-func newBody(value string) io.ReadSeeker {
-	return bytes.NewReader([]byte(value))
+func IsObjectNotFoundErr(err error) bool {
+	if aerr, ok := err.(awserr.Error); ok {
+		if aerr.Code() == s3.ErrCodeNoSuchKey {
+			return true
+		}
+	}
+	return false
+}
+
+func ListAllObjects(config S3Config) ([]string, error) {
+	svc, err := newS3Service(config)
+	if err != nil {
+		return nil, err
+	}
+
+	allObjectsList, err := listAllObjects(svc, config)
+	if err != nil {
+		return nil, err
+	}
+
+	var keys []string
+	for _, obj := range allObjectsList.Contents {
+		keys = append(keys, *obj.Key)
+	}
+
+	return keys, nil
 }
