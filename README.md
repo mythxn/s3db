@@ -30,3 +30,12 @@ To start using s3db, follow these steps:
 2. Launch the included Gin application using `go run main.go`
 3. Use the provided endpoints to manage your records in the AWS S3 object store.
 4. Profit! 
+
+
+### Scalability
+
+Theoretical scalability of s3db is as follows:
+- **`Read TPS`**: 5,500 GET requests per second.
+- **`Write TPS`**: 3,500 PUT/POST/DELETE requests per second.
+- **`Monthly Reads`**: 5,500 * 60 * 60 * 24 * 30 = 475,200,000 requests.
+- **`Monthly Writes`**: 3,500 * 60 * 60 * 24 * 30 = 302,400,000 requests.
